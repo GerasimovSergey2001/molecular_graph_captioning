@@ -48,7 +48,7 @@ def main():
 
     stage1model = Stage1Wrapper(gnn_pretrained="./checkpoints/graphcl_80.pth").to(device)
     optimizer = torch.optim.AdamW(stage1model.parameters(), lr=init_lr, weight_decay=weight_decay)
-    scheduler = get_scheduler(optimizer, max_steps, warmup_steps, min_lr)
+    scheduler = get_scheduler(optimizer, max_steps, warmup_steps, min_lr, start_factor=warmup_lr/init_lr)
     criterion = MolCALoss(learnable_temp=False)
 
     total_loss = []
@@ -57,7 +57,7 @@ def main():
     for epoch in tqdm(range(1, num_epochs+1)):
         epoch_loss = []
         stage1model.train()
-        for graphs, text_ids, attention_mask in tqdm(train_loader):
+        for graphs, text_ids, attention_mask in train_loader:
             graphs, text_ids, attention_mask  = graphs.to(device), text_ids.to(device), attention_mask.to(device)
             graph_feats, t_feats = stage1model(graphs, text_ids, attention_mask)
             loss = criterion(graph_feats, t_feats, stage1model.itm_head)

@@ -5,10 +5,10 @@ def freeze_model(model):
     for param in model.parameters():
         param.requires_grad = False
 
-def get_scheduler(optimizer, max_steps, warmup_steps, min_lr):
+def get_scheduler(optimizer, max_steps, warmup_steps, min_lr, start_factor=0.01):
     warmup_scheduler = LinearLR(
         optimizer, 
-        start_factor=0.01, 
+        start_factor=start_factor, 
         total_iters=warmup_steps
     )
     

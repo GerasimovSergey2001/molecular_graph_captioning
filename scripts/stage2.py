@@ -1,0 +1,206 @@
+import torch
+import numpy as np
+from src.datasets.processed_dataset import PreprocessedGraphDataset
+from torch.utils.data import DataLoader
+
+import matplotlib.pyplot as plt
+
+from tqdm import tqdm
+from transformers import AutoTokenizer,  OPTForCausalLM
+
+from src.model.stage_models import Stage2Wrapper
+from src.datasets.collate import TrainCollater2
+from src.model.utils import get_scheduler, freeze_model
+
+from sacrebleu import corpus_bleu
+from bert_score import score as bertscore
+
+from IPython.display import clear_output
+
+def main():
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    model_name = "facebook/galactica-1.3b"
+
+    galactica_tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+
+    train_dataset = PreprocessedGraphDataset(graph_path="./data/train_graphs.pkl")
+    val_dataset = PreprocessedGraphDataset(graph_path="./data/validation_graphs.pkl") 
+
+    num_workers, pin_memory = 4, True
+
+    train_loader = DataLoader(train_dataset, 
+                                batch_size=32, shuffle=True, 
+                                num_workers=num_workers, pin_memory=pin_memory, 
+                                collate_fn=TrainCollater2(galactica_tokenizer, None)
+                                )
+    val_loader = DataLoader(val_dataset, 
+                                batch_size=32, shuffle=False, 
+                                num_workers=num_workers, pin_memory=pin_memory, 
+                                collate_fn=TrainCollater2(galactica_tokenizer, None)
+                                )
+
+
+
+    # 2. Добавляем специальный токен для молекулы, если его нет в словаре
+    special_tokens = {"additional_special_tokens": ["<mol>"]}
+    galactica_tokenizer.add_special_tokens(special_tokens)
+    galactica_tokenizer.pad_token = "<pad>"
+    galactica_tokenizer.padding_side = "left"
+
+    if galactica_tokenizer.eos_token is None:
+        galactica_tokenizer.eos_token = "</s>"
+        galactica_tokenizer.eos_token_id = 2
+
+    stage2model = Stage2Wrapper(gnn_pretrained='checkpoints/graphcl_80.pth').to(device)
+
+    # 3. Загрузка модели
+    # device_map="auto" сама распределит модель, 
+    # torch_dtype=torch.float16 критически важен для экономии памяти на P100
+    model = OPTForCausalLM.from_pretrained(
+        model_name, 
+        dtype=torch.float32, 
+        device_map=device
+    )
+
+    # 4. Важно: если мы добавили токен в токенизатор, 
+    # нужно расширить матрицу эмбеддингов модели
+    model.resize_token_embeddings(len(galactica_tokenizer))
+    freeze_model(model)
+
+    warmup_steps = 1000
+    init_lr = 1e-4
+    min_lr = 1e-5
+    weight_decay = 0.05
+    warmup_lr = 1e-6
+    retrieval_eval_epoch = 10
+    num_epochs = 10
+    max_steps = len(train_loader)*num_epochs
+
+    optimizer = torch.optim.AdamW(stage2model.parameters(), lr=init_lr, weight_decay=weight_decay)
+    scheduler = get_scheduler(optimizer, max_steps, warmup_steps, min_lr, start_factor=warmup_lr/init_lr)
+
+    total_loss = []
+    val_loss = []
+    for epoch in tqdm(range(1, num_epochs+1), desc="Epoch"):
+        stage2model.train()
+        epoch_loss = []
+        for batch in train_loader:
+            for k, v in batch.items():
+                batch[k] = v.to(device)
+            
+            graph_embs= stage2model(batch['batch_graph'])
+            
+            embs = model.get_input_embeddings()(batch['input_ids'])
+
+            embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
+
+            attention_mask = batch['attention_mask']
+
+            labels = batch['labels']
+
+            assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
+
+            loss = model(
+                inputs_embeds=embs,       
+                attention_mask=attention_mask,
+                labels=labels,           
+                return_dict=True
+            ).loss
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+
+            epoch_loss.append(loss.detach().cpu().numpy())
+        
+
+        total_loss.append(np.mean(epoch_loss))
+
+        plt.figure(figsize=(12, 5))
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.title("Train Set")
+        plt.plot(np.arange(len(total_loss)), total_loss)
+        plt.tight_layout()
+        plt.show()
+
+        if epoch%retrieval_eval_epoch==0:
+            val_epoch_loss = []
+            refs, preds = [], []
+            stage2model.eval()
+            for batch in val_loader:
+
+                for k, v in batch.items():
+                    batch[k] = v.to(device)
+
+                with torch.no_grad():
+                    graph_embs= stage2model(batch['batch_graph'])
+                
+                    embs = model.get_input_embeddings()(batch['input_ids'])
+
+                    embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
+
+                    attention_mask = batch['attention_mask']
+
+                    labels = batch['labels']
+
+                    assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
+
+                    loss = model(
+                        inputs_embeds=embs,       
+                        attention_mask=attention_mask,
+                        labels=labels,           
+                        return_dict=True).loss
+                    
+                    prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
+                    prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
+                    
+                    generated_ids = model.generate(
+                        inputs_embeds = prompt_embs,
+                        attention_mask=batch["prompt_attention_mask"],
+                        max_new_tokens=128,
+                        pad_token_id=galactica_tokenizer.pad_token_id,
+                        eos_token_id=galactica_tokenizer.eos_token_id,
+                        do_sample=False
+                    )
+                    preds.extend(
+                        galactica_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+                    )
+                    refs.extend(batch['batch_graph'].description)
+                    
+                    val_epoch_loss.append(loss.detach().cpu().numpy())  
+
+            val_loss.append(np.mean(val_epoch_loss))
+
+            plt.figure(figsize=(12, 5))
+            plt.xlabel('Epochs')
+            plt.ylabel('Loss')
+            plt.title("Val Set")
+            plt.plot(np.arange(len(val_loss)), val_loss)
+            plt.tight_layout()
+            plt.show()
+
+            _, _, f1 = bertscore(
+                        preds, 
+                        refs, 
+                        lang="en", 
+                        device=device,
+                        verbose=False
+                    )
+            f1 = f1.mean().item()
+
+            bleu = corpus_bleu(preds, [[ref] for ref in refs]).score
+            print("Bleu: ", bleu)
+            print("F1: ", f1)
+
+            clear_output(wait=True)
+
+    torch.save(stage2model.gnn.state_dict(), "./checkpoints/gnn_stage2.pth")
+    torch.save(stage2model.adapter.state_dict(), "./checkpoints/mlp_adapter_stage2.pth")
+
+if __name__=="__main__":
+    main()
