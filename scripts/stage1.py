@@ -21,18 +21,18 @@ def main():
 
     tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
 
-    train_dataset = PreprocessedGraphDataset(graph_path="./data/validation_graphs.pkl") #train_graphs.pkl
+    train_dataset = PreprocessedGraphDataset(graph_path="./data/train_graphs.pkl") #train_graphs.pkl
     val_dataset = PreprocessedGraphDataset(graph_path="./data/validation_graphs.pkl") 
 
-    num_workers, pin_memory = 0, False
+    num_workers, pin_memory = 4, True
 
     train_loader = DataLoader(train_dataset, 
-                            batch_size=2, shuffle=True, 
+                            batch_size=64, shuffle=True, 
                             num_workers=num_workers, pin_memory=pin_memory, 
                             collate_fn=TrainCollater(tokenizer, 256)
                             )
     val_loader = DataLoader(val_dataset, 
-                            batch_size=2, shuffle=False, 
+                            batch_size=64, shuffle=False, 
                             num_workers=num_workers, pin_memory=pin_memory, 
                             collate_fn=TrainCollater(tokenizer, 256)
                             )
