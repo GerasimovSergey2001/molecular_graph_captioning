@@ -2,6 +2,8 @@ import torch
 from torch_geometric.data import Batch
 from rdkit import Chem
 
+
+
 class TrainCollater(object):
     def __init__(self, tokenizer, text_max_len):
         self.tokenizer = tokenizer
@@ -31,7 +33,9 @@ class TrainCollater(object):
                 'STEREONONE','STEREOANY','STEREOZ','STEREOE','STEREOCIS','STEREOTRANS',
             ],
         }
-    
+
+        self.BOND_LOOKUP = {s: getattr(Chem.rdchem.BondType, s.upper()) for s in self.e_map['bond_type'] if s != 'UNSPECIFIED'}
+
     def process_edge_attr(self, edge_attr):
         bond_type = edge_attr[:, 0]
         new_bond_attr = torch.zeros_like(bond_type)
@@ -48,9 +52,15 @@ class TrainCollater(object):
 
         return torch.stack([new_bond_attr, new_stereo_attr], dim=1)
 
-    def get_mol_and_gin_features(self, graph):
+
+    def get_mol_and_smiles(self, graph):
+        """
+        Только восстановление SMILES из графа OGB
+        """
         mol = Chem.RWMol()
         node_features = graph.x.cpu().numpy()
+        
+        # 1. Добавляем атомы
         for feat in node_features:
             atom = Chem.Atom(int(self.x_map['atomic_num'][feat[0]]))
             atom.SetChiralTag(getattr(Chem.rdchem.ChiralType, self.x_map['chirality'][feat[1]]))
@@ -62,71 +72,46 @@ class TrainCollater(object):
         adj = graph.edge_index.cpu().numpy()
         edge_attr = graph.edge_attr.cpu().numpy()
         
+        # Сет для предотвращения дублирования связей
+        added_bonds = set()
+        
+        # 2. Добавляем связи
         for i in range(adj.shape[1]):
             u, v = int(adj[0, i]), int(adj[1, i])
             
-            if mol.GetBondBetweenAtoms(u, v) is not None or u == v:
-                continue
+            if u >= v: continue # Добавляем связь только один раз (u < v)
                 
+            bond_key = (u, v)
             bt_str = self.e_map['bond_type'][edge_attr[i, 0]]
-            mol.AddBond(u, v, getattr(Chem.rdchem.BondType, bt_str.upper()))
             
-            bond = mol.GetBondBetweenAtoms(u, v)
-            stereo_type = self.e_map['stereo'][edge_attr[i, 1]]
-            if stereo_type != 'STEREONONE':
-                bond.SetStereo(getattr(Chem.rdchem.BondStereo, stereo_type))
+            if bt_str != 'UNSPECIFIED':
+                mol.AddBond(u, v, self.BOND_LOOKUP.get(bt_str, Chem.rdchem.BondType.SINGLE))
 
         final_mol = mol.GetMol()
         
+        # 3. Финализация и генерация SMILES
         try:
-            Chem.SanitizeMol(final_mol)
-            Chem.SetDoubleBondNeighborDirections(final_mol)
+            # SanitizeMol обязателен, чтобы MolToSmiles выдал корректную строку
+            Chem.SanitizeMol(final_mol) 
+            smiles = Chem.MolToSmiles(final_mol, isomericSmiles=True, canonical=True)
         except:
-            pass
-            
-        smiles = Chem.MolToSmiles(final_mol, isomericSmiles=True, canonical=True)
-
-        bt_map = {
-            Chem.rdchem.BondType.SINGLE: 0, 
-            Chem.rdchem.BondType.DOUBLE: 1, 
-            Chem.rdchem.BondType.TRIPLE: 2, 
-            Chem.rdchem.BondType.AROMATIC: 3
-        }
-        
-        bd_map = {
-            Chem.rdchem.BondDir.NONE: 0,
-            Chem.rdchem.BondDir.ENDUPRIGHT: 1,
-            Chem.rdchem.BondDir.ENDDOWNRIGHT: 2
-        }
-
-        gin_edge_attr = []
-        for i in range(adj.shape[1]):
-            u, v = int(adj[0, i]), int(adj[1, i])
-            bond = final_mol.GetBondBetweenAtoms(u, v)
-            
-            if bond is None:
-                gin_edge_attr.append([0, 0])
-            else:
-                bt = bt_map.get(bond.GetBondType(), 0)
-                bd = bd_map.get(bond.GetBondDir(), 0)
-                gin_edge_attr.append([bt, bd])
+            # Если молекула химически невозможна (ошибки валентности и т.д.)
+            smiles = "" 
                 
-        return smiles, torch.tensor(gin_edge_attr, dtype=torch.long)
+        return smiles
 
     def __call__(self, batch):
         all_smiles = []
-        all_gin_edge_attrs = []
         
         for graph in batch:
-            smiles, edge_attr = self.get_mol_and_gin_features(graph)
+            smiles  = self.get_mol_and_smiles(graph)
             all_smiles.append(smiles)
-            all_gin_edge_attrs.append(edge_attr)
         
         batch_graph = Batch.from_data_list(batch)
         
         batch_graph.x = batch_graph.x[:, :2].clone()
         
-        batch_graph.edge_attr = torch.cat(all_gin_edge_attrs, dim=0) #self.process_edge_attr(batch_graph.edge_attr)
+        batch_graph.edge_attr = self.process_edge_attr(batch_graph.edge_attr)
                
         text_list = [data.description for data in batch]
         text_batch = self.tokenizer(
@@ -169,14 +154,8 @@ class TrainCollater2(object):
                 'STEREONONE','STEREOANY','STEREOZ','STEREOE','STEREOCIS','STEREOTRANS',
             ],
         }
+        self.BOND_LOOKUP = {s: getattr(Chem.rdchem.BondType, s.upper()) for s in self.e_map['bond_type'] if s != 'UNSPECIFIED'}
 
-    def genereate_prompt(self, smiles_text):
-        mol_placeholders = "<mol> "*32
-        prompt = f"Given the SMILES of the molecule [START_I_SMILES] {smiles_text} [END_I_SMILES] " \
-        + f"{mol_placeholders}. "  + "Description: "
-        # prompt = f"[START_I_SMILES] {smiles_text} [END_I_SMILES] \nDescription: "
-        return prompt
-    
     def process_edge_attr(self, edge_attr):
         bond_type = edge_attr[:, 0]
         new_bond_attr = torch.zeros_like(bond_type)
@@ -193,9 +172,15 @@ class TrainCollater2(object):
 
         return torch.stack([new_bond_attr, new_stereo_attr], dim=1)
 
-    def get_mol_and_gin_features(self, graph):
+
+    def get_mol_and_smiles(self, graph):
+        """
+        Только восстановление SMILES из графа OGB
+        """
         mol = Chem.RWMol()
         node_features = graph.x.cpu().numpy()
+        
+        # 1. Добавляем атомы
         for feat in node_features:
             atom = Chem.Atom(int(self.x_map['atomic_num'][feat[0]]))
             atom.SetChiralTag(getattr(Chem.rdchem.ChiralType, self.x_map['chirality'][feat[1]]))
@@ -207,59 +192,43 @@ class TrainCollater2(object):
         adj = graph.edge_index.cpu().numpy()
         edge_attr = graph.edge_attr.cpu().numpy()
         
+        # Сет для предотвращения дублирования связей
+        added_bonds = set()
+        
+        # 2. Добавляем связи
         for i in range(adj.shape[1]):
             u, v = int(adj[0, i]), int(adj[1, i])
             
-            if mol.GetBondBetweenAtoms(u, v) is not None or u == v:
-                continue
+            if u >= v: continue # Добавляем связь только один раз (u < v)
                 
+            bond_key = (u, v)
             bt_str = self.e_map['bond_type'][edge_attr[i, 0]]
-            mol.AddBond(u, v, getattr(Chem.rdchem.BondType, bt_str.upper()))
             
-            bond = mol.GetBondBetweenAtoms(u, v)
-            stereo_type = self.e_map['stereo'][edge_attr[i, 1]]
-            if stereo_type != 'STEREONONE':
-                bond.SetStereo(getattr(Chem.rdchem.BondStereo, stereo_type))
+            if bt_str != 'UNSPECIFIED':
+                mol.AddBond(u, v, self.BOND_LOOKUP.get(bt_str, Chem.rdchem.BondType.SINGLE))
 
         final_mol = mol.GetMol()
         
+        # 3. Финализация и генерация SMILES
         try:
-            Chem.SanitizeMol(final_mol)
-            Chem.SetDoubleBondNeighborDirections(final_mol)
+            # SanitizeMol обязателен, чтобы MolToSmiles выдал корректную строку
+            Chem.SanitizeMol(final_mol) 
+            smiles = Chem.MolToSmiles(final_mol, isomericSmiles=True, canonical=True)
         except:
-            pass
-            
-        smiles = Chem.MolToSmiles(final_mol, isomericSmiles=True, canonical=True)
-
-        bt_map = {
-            Chem.rdchem.BondType.SINGLE: 0, 
-            Chem.rdchem.BondType.DOUBLE: 1, 
-            Chem.rdchem.BondType.TRIPLE: 2, 
-            Chem.rdchem.BondType.AROMATIC: 3
-        }
-        
-        bd_map = {
-            Chem.rdchem.BondDir.NONE: 0,
-            Chem.rdchem.BondDir.ENDUPRIGHT: 1,
-            Chem.rdchem.BondDir.ENDDOWNRIGHT: 2
-        }
-
-        gin_edge_attr = []
-        for i in range(adj.shape[1]):
-            u, v = int(adj[0, i]), int(adj[1, i])
-            bond = final_mol.GetBondBetweenAtoms(u, v)
-            
-            if bond is None:
-                gin_edge_attr.append([0, 0])
-            else:
-                bt = bt_map.get(bond.GetBondType(), 0)
-                bd = bd_map.get(bond.GetBondDir(), 0)
-                gin_edge_attr.append([bt, bd])
+            # Если молекула химически невозможна (ошибки валентности и т.д.)
+            smiles = "" 
                 
-        return smiles, torch.tensor(gin_edge_attr, dtype=torch.long)
+        return smiles
+
+    def genereate_prompt(self, smiles_text):
+        mol_placeholders = "<mol> "*32
+        prompt = f"Given the SMILES of the molecule [START_I_SMILES] {smiles_text} [END_I_SMILES] " \
+        + f"{mol_placeholders}. "  + "Description: "
+        # prompt = f"[START_I_SMILES] {smiles_text} [END_I_SMILES] \nDescription: "
+        return prompt
 
     def __call__(self, batch):
-        all_smiles = [self.get_mol_and_gin_features(g)[0] for g in batch]
+        all_smiles = [self.get_mol_and_smiles(g) for g in batch]
         batch_graph = Batch.from_data_list(batch)
         
         prompts_list = [self.genereate_prompt(s) for s in all_smiles]
