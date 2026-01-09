@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 from src.datasets.processed_dataset import PreprocessedGraphDataset
@@ -16,6 +17,8 @@ from src.model.utils import get_scheduler
 from IPython.display import clear_output
 
 def main():
+    plot_dir = "./plots"
+    os.makedirs(plot_dir, exist_ok=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -78,8 +81,8 @@ def main():
         plt.title("Train Set")
         plt.plot(np.arange(len(total_loss)), total_loss)
         plt.tight_layout()
+        plt.savefig(os.path.join(plot_dir, f"stage1_train_loss_epoch_{epoch}.png"))
         plt.show()
-        plt.close()
         
         if epoch%retrieval_eval_epoch==0:
             stage1model.eval()
@@ -93,14 +96,16 @@ def main():
                 val_epoch_loss.append(loss.detach().cpu().numpy())
             val_loss.append(np.mean(val_epoch_loss))
 
-        plt.figure(figsize=(12, 5))
-        plt.xlabel('Epochs')
-        plt.ylabel('Loss')
-        plt.title("Val Set")
-        plt.plot(np.arange(len(val_loss)), val_loss)
-        plt.tight_layout()
-        plt.show()
-        plt.close()
+        
+            val_epochs = [i for i in range(1, epoch + 1) if i % retrieval_eval_epoch == 0]
+            plt.figure(figsize=(12, 5))
+            plt.xlabel('Epochs')
+            plt.ylabel('Loss')
+            plt.title("Val Set")
+            plt.plot(val_epochs, val_loss)
+            plt.tight_layout()
+            plt.savefig(os.path.join(plot_dir, f"stage1_val_loss_epoch_{epoch}.png"))
+            plt.show()
 
 
     torch.save(stage1model.adapter.state_dict(), "./checkpoints/mlp_adapter_stage1.pth")

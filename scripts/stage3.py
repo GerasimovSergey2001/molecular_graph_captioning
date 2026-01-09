@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.optim as optim
 import numpy as np
@@ -19,6 +20,8 @@ from bert_score import score as bertscore
 from IPython.display import clear_output
 
 def main():
+    plot_dir = "./plots"
+    os.makedirs(plot_dir, exist_ok=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -167,8 +170,8 @@ def main():
         plt.title("Train Set")
         plt.plot(np.arange(len(total_loss)), total_loss)
         plt.tight_layout()
+        plt.savefig(os.path.join(plot_dir, f"stage3_train_loss_epoch_{epoch}.png"))
         plt.show()
-        plt.close()
 
         if epoch%retrieval_eval_epoch==0:
             val_epoch_loss = []
@@ -228,8 +231,8 @@ def main():
             plt.title("Val Set")
             plt.plot(np.arange(len(val_loss)), val_loss)
             plt.tight_layout()
+            plt.savefig(os.path.join(plot_dir, f"stage3_val_loss_epoch_{epoch}.png"))
             plt.show()
-            plt.close()
 
             _, _, f1 = bertscore(
                         preds, 
