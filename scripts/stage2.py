@@ -104,7 +104,7 @@ def main():
             for k, v in batch.items():
                 batch[k] = v.to(device)
 
-            with torch.absautocast(device_type=device, dtype=torch.float16):
+            with torch.autocast(device_type=device, dtype=torch.float16):
             
                 graph_embs= stage2model(batch['batch_graph'])
                 
@@ -158,7 +158,7 @@ def main():
                     batch[k] = v.to(device)
 
                 with torch.no_grad():
-                    with autocast(device_type=device, dtype=torch.float16):
+                    with torch.autocast(device_type=device, dtype=torch.float16):
                     
                         graph_embs= stage2model(batch['batch_graph'])
                     
