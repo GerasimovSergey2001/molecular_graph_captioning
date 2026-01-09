@@ -25,7 +25,7 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    accumulation_steps = 4
+    accumulation_steps = 16
 
     model_name = "facebook/galactica-1.3b"
 
@@ -38,12 +38,12 @@ def main():
     num_workers, pin_memory = 4, True
 
     train_loader = DataLoader(train_dataset, 
-                                batch_size=32, shuffle=True, 
+                                batch_size=8, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
     val_loader = DataLoader(val_dataset, 
-                                batch_size=32, shuffle=False, 
+                                batch_size=8, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
@@ -73,6 +73,7 @@ def main():
         dtype=torch.float16, 
         device_map=device
     )
+    model.gradient_checkpointing_enable()
 
     # 4. Важно: если мы добавили токен в токенизатор, 
     # нужно расширить матрицу эмбеддингов модели
