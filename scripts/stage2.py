@@ -32,7 +32,7 @@ def main():
     galactica_tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 
-    train_dataset = PreprocessedGraphDataset(graph_path="./data/validation_graphs.pkl")
+    train_dataset = PreprocessedGraphDataset(graph_path="./data/train_graphs.pkl")
     val_dataset = PreprocessedGraphDataset(graph_path="./data/validation_graphs.pkl") 
 
     num_workers, pin_memory = 4, True
