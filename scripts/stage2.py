@@ -93,7 +93,7 @@ def main():
 
     optimizer = torch.optim.AdamW(stage2model.parameters(), lr=init_lr, weight_decay=weight_decay)
     scheduler = get_scheduler(optimizer, max_steps, warmup_steps, min_lr, start_factor=warmup_lr/init_lr)
-    scaler = GradScaler()
+    scaler = GradScaler('cuda', enabled=(device == 'cuda'))
     total_loss = []
     val_loss = []
     for epoch in tqdm(range(1, num_epochs+1)):
