@@ -38,12 +38,12 @@ def main():
     num_workers, pin_memory = 4, True
 
     train_loader = DataLoader(train_dataset, 
-                                batch_size=64, shuffle=True, 
+                                batch_size=32, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
     val_loader = DataLoader(val_dataset, 
-                                batch_size=64, shuffle=False, 
+                                batch_size=32, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
