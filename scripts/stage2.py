@@ -63,7 +63,7 @@ def main():
     stage2model = Stage2Wrapper(
                         gnn_pretrained='./checkpoints/graphcl_80.pth', 
                         adapter_pretrained="./checkpoints/mlp_adapter_stage1.pth"
-                        ).to(device).to(torch.float16)
+                        ).to(device)
 
     # 3. Загрузка модели
     # device_map="auto" сама распределит модель, 
