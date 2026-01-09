@@ -49,6 +49,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         model_name, 
         device_map=device,
+        torch_dtype=torch.bfloat16,
         trust_remote_code=True
     )
     lora_config = {
@@ -248,6 +249,10 @@ def main():
             print("F1: ", f1)
             print("Reference Example: ", refs[0])
             print("Generation Example: ", preds[0])
+
+            model.save_pretrained(f"./checkpoints/galactica_lora_epoch{epoch}")
+            torch.save(stage3model.gnn.state_dict(), f"./checkpoints/gnn_stage3_epoch{epoch}.pth")
+            torch.save(stage3model.adapter.state_dict(), f"./checkpoints/mlp_adapter_stage3{epoch}.pth")
 
 
     # Объединяем веса LoRA с основными весами

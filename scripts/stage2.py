@@ -3,6 +3,7 @@ import torch
 import numpy as np
 from src.datasets.processed_dataset import PreprocessedGraphDataset
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
 
 import matplotlib.pyplot as plt
 
@@ -23,6 +24,8 @@ def main():
     os.makedirs(plot_dir, exist_ok=True)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    accumulation_steps = 4
 
     model_name = "facebook/galactica-1.3b"
 
@@ -60,14 +63,14 @@ def main():
     stage2model = Stage2Wrapper(
                         gnn_pretrained='./checkpoints/graphcl_80.pth', 
                         adapter_pretrained="./checkpoints/mlp_adapter_stage1.pth"
-                        ).to(device)
+                        ).to(device).to(torch.float16)
 
     # 3. Загрузка модели
     # device_map="auto" сама распределит модель, 
     # torch_dtype=torch.float16 критически важен для экономии памяти на P100
     model = OPTForCausalLM.from_pretrained(
         model_name, 
-        dtype=torch.float32, 
+        dtype=torch.float16, 
         device_map=device
     )
 
@@ -84,46 +87,51 @@ def main():
     warmup_lr = 1e-6
     retrieval_eval_epoch = 10
     num_epochs = 10
-    max_steps = len(train_loader)*num_epochs
+    max_steps = (len(train_loader) // accumulation_steps) * num_epochs
 
     optimizer = torch.optim.AdamW(stage2model.parameters(), lr=init_lr, weight_decay=weight_decay)
     scheduler = get_scheduler(optimizer, max_steps, warmup_steps, min_lr, start_factor=warmup_lr/init_lr)
-
+    scaler = GradScaler()
     total_loss = []
     val_loss = []
     for epoch in tqdm(range(1, num_epochs+1)):
         clear_output(wait=True)
         stage2model.train()
         epoch_loss = []
-        for batch in train_loader:
+        for i, batch in enumerate(train_loader):
             for k, v in batch.items():
                 batch[k] = v.to(device)
+
+            with autocast(device_type=device, dtype=torch.float16):
             
-            graph_embs= stage2model(batch['batch_graph'])
-            
-            embs = model.get_input_embeddings()(batch['input_ids'])
+                graph_embs= stage2model(batch['batch_graph'])
+                
+                embs = model.get_input_embeddings()(batch['input_ids'])
 
-            embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
+                embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
 
-            attention_mask = batch['attention_mask']
+                attention_mask = batch['attention_mask']
 
-            labels = batch['labels']
+                labels = batch['labels']
 
-            assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
+                assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
 
-            loss = model(
-                inputs_embeds=embs,       
-                attention_mask=attention_mask,
-                labels=labels,           
-                return_dict=True
-            ).loss
+                loss = model(
+                    inputs_embeds=embs,       
+                    attention_mask=attention_mask,
+                    labels=labels,           
+                    return_dict=True
+                ).loss / accumulation_steps
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
+            scaler.scale(loss).backward()
 
-            epoch_loss.append(loss.detach().cpu().numpy())
+            if (i + 1) % accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                scheduler.step()
+
+            epoch_loss.append(loss.detach().cpu().numpy()*accumulation_steps)
         
 
         total_loss.append(np.mean(epoch_loss))
@@ -136,6 +144,7 @@ def main():
         plt.tight_layout()
         plt.savefig(os.path.join(plot_dir, f"stage2_train_loss_epoch_{epoch}.png"))
         plt.show()
+        plt.close()
 
         if epoch%retrieval_eval_epoch==0:
             val_epoch_loss = []
@@ -147,41 +156,44 @@ def main():
                     batch[k] = v.to(device)
 
                 with torch.no_grad():
-                    graph_embs= stage2model(batch['batch_graph'])
-                
-                    embs = model.get_input_embeddings()(batch['input_ids'])
-
-                    embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
-
-                    attention_mask = batch['attention_mask']
-
-                    labels = batch['labels']
-
-                    assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
-
-                    loss = model(
-                        inputs_embeds=embs,       
-                        attention_mask=attention_mask,
-                        labels=labels,           
-                        return_dict=True).loss
+                    with autocast(device_type=device, dtype=torch.float16):
                     
-                    prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
-                    prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
+                        graph_embs= stage2model(batch['batch_graph'])
                     
-                    generated_ids = model.generate(
-                        inputs_embeds = prompt_embs,
-                        attention_mask=batch["prompt_attention_mask"],
-                        max_new_tokens=128,
-                        pad_token_id=galactica_tokenizer.pad_token_id,
-                        eos_token_id=galactica_tokenizer.eos_token_id,
-                        do_sample=False
-                    )
+                        embs = model.get_input_embeddings()(batch['input_ids'])
+
+                        embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
+
+                        attention_mask = batch['attention_mask']
+
+                        labels = batch['labels']
+
+                        assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
+
+                        loss = model(
+                            inputs_embeds=embs,       
+                            attention_mask=attention_mask,
+                            labels=labels,           
+                            return_dict=True).loss / accumulation_steps
+                        
+                        prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
+                        prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
+                        
+                        generated_ids = model.generate(
+                            inputs_embeds = prompt_embs,
+                            attention_mask=batch["prompt_attention_mask"],
+                            max_new_tokens=128,
+                            pad_token_id=galactica_tokenizer.pad_token_id,
+                            eos_token_id=galactica_tokenizer.eos_token_id,
+                            do_sample=False,
+                            repetition_penalty=1.2
+                        )
                     preds.extend(
                         galactica_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
                     )
                     refs.extend(batch['batch_graph'].description)
                     
-                    val_epoch_loss.append(loss.detach().cpu().numpy())  
+                    val_epoch_loss.append(loss.detach().cpu().numpy()*accumulation_steps)  
 
             val_loss.append(np.mean(val_epoch_loss))
             val_epochs = [i for i in range(1, epoch + 1) if i % retrieval_eval_epoch == 0]
@@ -193,6 +205,7 @@ def main():
             plt.tight_layout()
             plt.savefig(os.path.join(plot_dir, f"stage2_val_loss_epoch_{epoch}.png"))
             plt.show()
+            plt.close()
             _, _, f1 = bertscore(
                         preds, 
                         refs, 
