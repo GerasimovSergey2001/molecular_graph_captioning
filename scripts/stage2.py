@@ -88,7 +88,7 @@ def main():
     min_lr = 1e-5
     weight_decay = 0.05
     warmup_lr = 1e-6
-    retrieval_eval_epoch = 1
+    retrieval_eval_epoch = 3
     num_epochs = 8
     max_steps = (len(train_loader) // accumulation_steps) * num_epochs
 
@@ -149,7 +149,7 @@ def main():
         plt.show()
         plt.close()
 
-        if epoch%retrieval_eval_epoch==0:
+        if (epoch-1)%retrieval_eval_epoch==0:
             
             torch.save(stage2model.gnn.state_dict(), f"./checkpoints/gnn_stage2_epoch{epoch}.pth")
             torch.save(stage2model.adapter.state_dict(), f"./checkpoints/mlp_adapter_stage2_epoch{epoch}.pth")
