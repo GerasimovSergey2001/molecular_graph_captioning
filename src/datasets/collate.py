@@ -48,7 +48,7 @@ class TrainCollater(object):
 class TrainCollater2(object):
     def __init__(self, tokenizer, text_max_len):
         self.tokenizer = tokenizer
-        self.text_max_len = text_max_len
+        self.text_max_len = text_max_len if text_max_len is not None else 1024
 
         # Карты маппинга OGB (входящие данные)
         self.x_map = {
@@ -161,7 +161,7 @@ class TrainCollater2(object):
             prompts_list, 
             padding=True, 
             truncation=True,
-            max_length=self.text_max_len if self.text_max_len else 1024,
+            max_length=self.text_max_len,
             return_tensors='pt', 
             add_special_tokens=False
             )

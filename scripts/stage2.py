@@ -40,12 +40,12 @@ def main():
     train_loader = DataLoader(train_dataset, 
                                 batch_size=16, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
-                                collate_fn=TrainCollater2(galactica_tokenizer, None)
+                                collate_fn=TrainCollater2(galactica_tokenizer, 2048)
                                 )
     val_loader = DataLoader(val_dataset, 
                                 batch_size=16, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
-                                collate_fn=TrainCollater2(galactica_tokenizer, None)
+                                collate_fn=TrainCollater2(galactica_tokenizer, 2048)
                                 )
 
 
@@ -88,8 +88,8 @@ def main():
     min_lr = 1e-5
     weight_decay = 0.05
     warmup_lr = 1e-6
-    retrieval_eval_epoch = 3
-    num_epochs = 10
+    retrieval_eval_epoch = 1
+    num_epochs = 8
     max_steps = (len(train_loader) // accumulation_steps) * num_epochs
 
     optimizer = torch.optim.AdamW(stage2model.parameters(), lr=init_lr, weight_decay=weight_decay)
