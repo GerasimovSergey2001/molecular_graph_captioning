@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from src.datasets.processed_dataset import PreprocessedGraphDataset
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.cuda.amp import GradScaler
 
 import matplotlib.pyplot as plt
 
@@ -12,7 +12,7 @@ from transformers import AutoTokenizer,  OPTForCausalLM
 
 from src.model.stage_models import Stage2Wrapper
 from src.datasets.collate import TrainCollater2
-from src.model.utils import get_scheduler, freeze_model
+from src.model.utils import get_scheduler, freeze_model, count_trainable_params
 
 from sacrebleu import corpus_bleu
 from bert_score import score as bertscore
@@ -80,6 +80,8 @@ def main():
     model.eval()
     freeze_model(model)
 
+    count_trainable_params(model, "Galactica")
+
     warmup_steps = 1000
     init_lr = 1e-4
     min_lr = 1e-5
@@ -102,7 +104,7 @@ def main():
             for k, v in batch.items():
                 batch[k] = v.to(device)
 
-            with autocast(device_type=device, dtype=torch.float16):
+            with torch.absautocast(device_type=device, dtype=torch.float16):
             
                 graph_embs= stage2model(batch['batch_graph'])
                 
@@ -119,7 +121,7 @@ def main():
                 loss = model(
                     inputs_embeds=embs,       
                     attention_mask=attention_mask,
-                    labels=labels,           
+                    labels=labels,              
                     return_dict=True
                 ).loss / accumulation_steps
 

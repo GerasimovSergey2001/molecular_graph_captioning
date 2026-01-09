@@ -5,6 +5,15 @@ def freeze_model(model):
     for param in model.parameters():
         param.requires_grad = False
 
+def count_trainable_params(model, name="Model"):
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"--- {name} ---")
+    print(f"Total Params: {total_params:,}")
+    print(f"Trainable Params: {trainable_params:,}")
+    print(f"Percentage: {100 * trainable_params / total_params:.2f}%")
+    print("-" * 20)
+
 def get_scheduler(optimizer, max_steps, warmup_steps, min_lr, start_factor=0.01):
     warmup_scheduler = LinearLR(
         optimizer, 
