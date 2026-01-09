@@ -161,7 +161,7 @@ class TrainCollater2(object):
             prompts_list, 
             padding=True, 
             truncation=True,
-            max_length=self.text_max_len if self.text_max_len else 512,
+            max_length=self.text_max_len if self.text_max_len else 1024,
             return_tensors='pt', 
             add_special_tokens=False
             )

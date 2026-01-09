@@ -25,25 +25,25 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    accumulation_steps = 16
+    accumulation_steps = 8
 
     model_name = "facebook/galactica-1.3b"
 
     galactica_tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 
-    train_dataset = PreprocessedGraphDataset(graph_path="./data/train_graphs.pkl")
+    train_dataset = PreprocessedGraphDataset(graph_path="./data/validation_graphs.pkl")
     val_dataset = PreprocessedGraphDataset(graph_path="./data/validation_graphs.pkl") 
 
     num_workers, pin_memory = 4, True
 
     train_loader = DataLoader(train_dataset, 
-                                batch_size=8, shuffle=True, 
+                                batch_size=16, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
     val_loader = DataLoader(val_dataset, 
-                                batch_size=8, shuffle=False, 
+                                batch_size=16, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
@@ -88,7 +88,7 @@ def main():
     min_lr = 1e-5
     weight_decay = 0.05
     warmup_lr = 1e-6
-    retrieval_eval_epoch = 10
+    retrieval_eval_epoch = 3
     num_epochs = 10
     max_steps = (len(train_loader) // accumulation_steps) * num_epochs
 
@@ -150,6 +150,10 @@ def main():
         plt.close()
 
         if epoch%retrieval_eval_epoch==0:
+            
+            torch.save(stage2model.gnn.state_dict(), f"./checkpoints/gnn_stage2_epoch{epoch}.pth")
+            torch.save(stage2model.adapter.state_dict(), f"./checkpoints/mlp_adapter_stage2_epoch{epoch}.pth")
+
             val_epoch_loss = []
             refs, preds = [], []
             stage2model.eval()

@@ -25,9 +25,18 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+    accumulation_steps = 8
+
     model_name = "facebook/galactica-1.3b"
 
     galactica_tokenizer = AutoTokenizer.from_pretrained(model_name)
+    special_tokens = {"additional_special_tokens": ["<mol>"]}
+    galactica_tokenizer.add_special_tokens(special_tokens)
+    galactica_tokenizer.pad_token = "<pad>"
+    galactica_tokenizer.padding_side = "left"
+    if galactica_tokenizer.eos_token is None:
+        galactica_tokenizer.eos_token = "</s>"
+        galactica_tokenizer.eos_token_id = 2
 
 
     train_dataset = PreprocessedGraphDataset(graph_path="./data/train_graphs.pkl")
@@ -36,62 +45,47 @@ def main():
     num_workers, pin_memory = 4, True
 
     train_loader = DataLoader(train_dataset, 
-                                batch_size=64, shuffle=True, 
+                                batch_size=16, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
     val_loader = DataLoader(val_dataset, 
-                                batch_size=64, shuffle=False, 
+                                batch_size=16, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
 
+    
+
+    # 2. Загружаем модель в bfloat16 (для A100 это идеал)
     model = AutoModelForCausalLM.from_pretrained(
         model_name, 
         device_map=device,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float16, 
         trust_remote_code=True
     )
-    lora_config = {
-        "base_model_name_or_path": None,
-        "bias": "none",
-        "fan_in_fan_out": False,
-        "inference_mode": False,
-        "init_lora_weights": True,
-        "lora_alpha": 32,
-        "lora_dropout": 0.1,
-        "target_modules": ["q_proj", "v_proj", "out_proj", "fc1", "fc2"],
-        "peft_type": "LORA",
-        "r": 16,
-        "modules_to_save": None,
-        "task_type": "CAUSAL_LM"
-    }
-
-    # 2. Настройка LoRA
-    lora_config = LoraConfig(
-        **lora_config
-    )
-
-    # 3. Оборачиваем модель
-    model = get_peft_model(model, lora_config)
-
-
-    # 2. Добавляем специальный токен для молекулы, если его нет в словаре
-    special_tokens = {"additional_special_tokens": ["<mol>"]}
-    galactica_tokenizer.add_special_tokens(special_tokens)
-    galactica_tokenizer.pad_token = "<pad>"
-    galactica_tokenizer.padding_side = "left"
-
-
-    if galactica_tokenizer.eos_token is None:
-        galactica_tokenizer.eos_token = "</s>"
-        galactica_tokenizer.eos_token_id = 2
-
+    
+    # 3. Сначала расширяем эмбеддинги!
     model.resize_token_embeddings(len(galactica_tokenizer))
 
+    # 4. Теперь настраиваем LoRA
+    lora_config = LoraConfig(
+        r=16,
+        lora_alpha=32,
+        target_modules=["q_proj", "v_proj", "k_proj", "out_proj"], # k_proj тоже можно добавить
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM"
+    )
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters() # Посмотрите, сколько параметров добавилось
+
+    # 5. Инициализируем Stage3Model (GNN + Adapter)
+    # Оставляем в float32 для стабильности AdamW
     stage3model = Stage2Wrapper(
         gnn_pretrained='./checkpoints/gnn_stage2.pth', 
-        adapter_pretrained='./checkpoints/mlp_adapter_stage2.pth').to(device)
+        adapter_pretrained='./checkpoints/mlp_adapter_stage2.pth'
+    ).to(device)
 
     # 3. Загрузка модели
     # device_map="auto" сама распределит модель, 
@@ -109,7 +103,7 @@ def main():
     num_epochs = 100
     max_steps = len(train_loader)*num_epochs
 
-
+    scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
     # Настраиваем AdamW (стандарт для Stage 3)
     optimizer = optim.AdamW([
         {
@@ -132,35 +126,40 @@ def main():
         stage3model.train()
         model.train()
         epoch_loss = []
-        for batch in train_loader:
+        for i, batch in enumerate(train_loader):
             for k, v in batch.items():
                 batch[k] = v.to(device)
+
+            with torch.autocast(device_type=device, dtype=torch.float16):
             
-            graph_embs= stage3model(batch['batch_graph'])
-            
-            embs = model.get_input_embeddings()(batch['input_ids'])
+                graph_embs= stage3model(batch['batch_graph'])
+                
+                embs = model.get_input_embeddings()(batch['input_ids'])
 
-            embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
+                embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
 
-            attention_mask = batch['attention_mask']
+                attention_mask = batch['attention_mask']
 
-            labels = batch['labels']
+                labels = batch['labels']
 
-            assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
+                assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
 
-            loss = model(
-                inputs_embeds=embs,       
-                attention_mask=attention_mask,
-                labels=labels,           
-                return_dict=True
-            ).loss
+                loss = model(
+                    inputs_embeds=embs,       
+                    attention_mask=attention_mask,
+                    labels=labels,           
+                    return_dict=True
+                ).loss / accumulation_steps
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
+            scaler.scale(loss).backward()
 
-            epoch_loss.append(loss.detach().cpu().numpy())
+            if (i + 1) % accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                scheduler.step()
+
+            epoch_loss.append(loss.detach().cpu().numpy()*accumulation_steps)
         
 
         total_loss.append(np.mean(epoch_loss))
@@ -185,38 +184,39 @@ def main():
                     batch[k] = v.to(device)
 
                 with torch.no_grad():
-                    graph_embs= stage3model(batch['batch_graph'])
-                
-                    embs = model.get_input_embeddings()(batch['input_ids'])
-
-                    embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
-
-                    attention_mask = batch['attention_mask']
-
-                    labels = batch['labels']
-
-                    assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
-
-                    loss = model(
-                        inputs_embeds=embs,       
-                        attention_mask=attention_mask,
-                        labels=labels,           
-                        return_dict=True).loss
-                
-                    prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
-                    prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
+                    with torch.autocast(device_type=device, dtype=torch.float16):
+                        graph_embs= stage3model(batch['batch_graph'])
                     
-                    generated_ids = model.generate(
-                        inputs_embeds = prompt_embs,
-                        attention_mask=batch["prompt_attention_mask"],
-                        max_new_tokens=128,
-                        do_sample=True,         
-                        temperature=0.7,       
-                        top_p=0.7,               
-                        repetition_penalty=1.2,
-                        pad_token_id=galactica_tokenizer.pad_token_id,
-                        eos_token_id=galactica_tokenizer.eos_token_id,
-                    )
+                        embs = model.get_input_embeddings()(batch['input_ids'])
+
+                        embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
+
+                        attention_mask = batch['attention_mask']
+
+                        labels = batch['labels']
+
+                        assert embs.shape[1] == attention_mask.shape[1] == labels.shape[1]
+
+                        loss = model(
+                            inputs_embeds=embs,       
+                            attention_mask=attention_mask,
+                            labels=labels,           
+                            return_dict=True).loss
+                    
+                        prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
+                        prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
+                        
+                        generated_ids = model.generate(
+                            inputs_embeds = prompt_embs,
+                            attention_mask=batch["prompt_attention_mask"],
+                            max_new_tokens=128,
+                            do_sample=True,         
+                            temperature=0.7,       
+                            top_p=0.7,               
+                            repetition_penalty=1.2,
+                            pad_token_id=galactica_tokenizer.pad_token_id,
+                            eos_token_id=galactica_tokenizer.eos_token_id,
+                        )
                     preds.extend(
                         galactica_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
                     )
@@ -266,4 +266,3 @@ def main():
 if __name__=='__main__':
     main()
 
-        
