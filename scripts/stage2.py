@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from src.datasets.processed_dataset import PreprocessedGraphDataset
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler
+from torch.amp import GradScaler
 
 import matplotlib.pyplot as plt
 
