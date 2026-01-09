@@ -55,6 +55,7 @@ def main():
     val_loss = []
 
     for epoch in tqdm(range(1, num_epochs+1)):
+        clear_output(wait=True)
         epoch_loss = []
         stage1model.train()
         for graphs, text_ids, attention_mask in train_loader:
@@ -78,6 +79,7 @@ def main():
         plt.plot(np.arange(len(total_loss)), total_loss)
         plt.tight_layout()
         plt.show()
+        plt.close()
         
         if epoch%retrieval_eval_epoch==0:
             stage1model.eval()
@@ -98,8 +100,8 @@ def main():
         plt.plot(np.arange(len(val_loss)), val_loss)
         plt.tight_layout()
         plt.show()
+        plt.close()
 
-        clear_output(wait=True)
 
     torch.save(stage1model.adapter.state_dict(), "./checkpoints/mlp_adapter_stage1.pth")
 

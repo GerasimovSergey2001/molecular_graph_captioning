@@ -32,12 +32,12 @@ def main():
     num_workers, pin_memory = 4, True
 
     train_loader = DataLoader(train_dataset, 
-                                batch_size=32, shuffle=True, 
+                                batch_size=64, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
     val_loader = DataLoader(val_dataset, 
-                                batch_size=32, shuffle=False, 
+                                batch_size=64, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
@@ -68,6 +68,7 @@ def main():
     # 4. Важно: если мы добавили токен в токенизатор, 
     # нужно расширить матрицу эмбеддингов модели
     model.resize_token_embeddings(len(galactica_tokenizer))
+    model.eval()
     freeze_model(model)
 
     warmup_steps = 1000
@@ -85,6 +86,7 @@ def main():
     total_loss = []
     val_loss = []
     for epoch in tqdm(range(1, num_epochs+1), desc="Epoch"):
+        clear_output(wait=True)
         stage2model.train()
         epoch_loss = []
         for batch in train_loader:
@@ -127,6 +129,7 @@ def main():
         plt.plot(np.arange(len(total_loss)), total_loss)
         plt.tight_layout()
         plt.show()
+        plt.close()
 
         if epoch%retrieval_eval_epoch==0:
             val_epoch_loss = []
@@ -183,6 +186,7 @@ def main():
             plt.plot(np.arange(len(val_loss)), val_loss)
             plt.tight_layout()
             plt.show()
+            plt.close()
 
             _, _, f1 = bertscore(
                         preds, 
@@ -196,8 +200,6 @@ def main():
             bleu = corpus_bleu(preds, [[ref] for ref in refs]).score
             print("Bleu: ", bleu)
             print("F1: ", f1)
-
-            clear_output(wait=True)
 
     torch.save(stage2model.gnn.state_dict(), "./checkpoints/gnn_stage2.pth")
     torch.save(stage2model.adapter.state_dict(), "./checkpoints/mlp_adapter_stage2.pth")

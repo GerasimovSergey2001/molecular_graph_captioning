@@ -33,12 +33,12 @@ def main():
     num_workers, pin_memory = 4, True
 
     train_loader = DataLoader(train_dataset, 
-                                batch_size=32, shuffle=True, 
+                                batch_size=64, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
     val_loader = DataLoader(val_dataset, 
-                                batch_size=32, shuffle=False, 
+                                batch_size=64, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, None)
                                 )
@@ -124,7 +124,9 @@ def main():
     total_loss = []
     val_loss = []
     for epoch in tqdm(range(1, num_epochs+1), desc="Epoch"):
+        clear_output(wait=True)
         stage3model.train()
+        model.train()
         epoch_loss = []
         for batch in train_loader:
             for k, v in batch.items():
@@ -166,11 +168,13 @@ def main():
         plt.plot(np.arange(len(total_loss)), total_loss)
         plt.tight_layout()
         plt.show()
+        plt.close()
 
         if epoch%retrieval_eval_epoch==0:
             val_epoch_loss = []
             refs, preds = [], []
             stage3model.eval()
+            model.eval()
             for batch in val_loader:
 
                 for k, v in batch.items():
@@ -225,6 +229,7 @@ def main():
             plt.plot(np.arange(len(val_loss)), val_loss)
             plt.tight_layout()
             plt.show()
+            plt.close()
 
             _, _, f1 = bertscore(
                         preds, 
@@ -240,8 +245,6 @@ def main():
             print("F1: ", f1)
             print("Reference Example: ", refs[0])
             print("Generation Example: ", preds[0])
-
-            clear_output(wait=True)
 
 
     # Объединяем веса LoRA с основными весами
