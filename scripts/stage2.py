@@ -88,8 +88,8 @@ def main():
     min_lr = 1e-5
     weight_decay = 0.05
     warmup_lr = 1e-6
-    retrieval_eval_epoch = 3
-    num_epochs = 8
+    retrieval_eval_epoch = 4
+    num_epochs = 10
     max_steps = (len(train_loader) // accumulation_steps) * num_epochs
 
     optimizer = torch.optim.AdamW(stage2model.parameters(), lr=init_lr, weight_decay=weight_decay)
@@ -183,27 +183,27 @@ def main():
                             labels=labels,           
                             return_dict=True).loss / accumulation_steps
                         
-                        prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
-                        prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
+                        # prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
+                        # prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
                         
-                        generated_ids = model.generate(
-                            inputs_embeds = prompt_embs,
-                            attention_mask=batch["prompt_attention_mask"],
-                            max_new_tokens=128,
-                            pad_token_id=galactica_tokenizer.pad_token_id,
-                            eos_token_id=galactica_tokenizer.eos_token_id,
-                            do_sample=False,
-                            repetition_penalty=1.2
-                        )
-                    preds.extend(
-                        galactica_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-                    )
-                    refs.extend(batch['batch_graph'].description)
+                        # generated_ids = model.generate(
+                        #     inputs_embeds = prompt_embs,
+                        #     attention_mask=batch["prompt_attention_mask"],
+                        #     max_new_tokens=128,
+                        #     pad_token_id=galactica_tokenizer.pad_token_id,
+                        #     eos_token_id=galactica_tokenizer.eos_token_id,
+                        #     do_sample=False,
+                        #     repetition_penalty=1.2
+                        # )
+                    # preds.extend(
+                    #     galactica_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+                    # )
+                    # refs.extend(batch['batch_graph'].description)
                     
                     val_epoch_loss.append(loss.detach().cpu().numpy()*accumulation_steps)  
 
             val_loss.append(np.mean(val_epoch_loss))
-            val_epochs = [i for i in range(1, epoch + 1) if i % retrieval_eval_epoch == 0]
+            val_epochs = [i for i in range(1, epoch + 1) if (i-1) % retrieval_eval_epoch == 0]
             plt.figure(figsize=(12, 5))
             plt.xlabel('Epochs')
             plt.ylabel('Loss')
@@ -213,18 +213,18 @@ def main():
             plt.savefig(os.path.join(plot_dir, f"stage2_val_loss_epoch_{epoch}.png"))
             plt.show()
             plt.close()
-            _, _, f1 = bertscore(
-                        preds, 
-                        refs, 
-                        lang="en", 
-                        device=device,
-                        verbose=False
-                    )
-            f1 = f1.mean().item()
+            # _, _, f1 = bertscore(
+            #             preds, 
+            #             refs, 
+            #             lang="en", 
+            #             device=device,
+            #             verbose=False
+            #         )
+            # f1 = f1.mean().item()
 
-            bleu = corpus_bleu(preds, [[ref] for ref in refs]).score
-            print("Bleu: ", bleu)
-            print("F1: ", f1)
+            # bleu = corpus_bleu(preds, [[ref] for ref in refs]).score
+            # print("Bleu: ", bleu)
+            # print("F1: ", f1)
 
     torch.save(stage2model.gnn.state_dict(), "./checkpoints/gnn_stage2.pth")
     torch.save(stage2model.adapter.state_dict(), "./checkpoints/mlp_adapter_stage2.pth")
