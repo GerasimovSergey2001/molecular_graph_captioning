@@ -197,7 +197,7 @@ def main():
                     with torch.autocast(device_type=device, dtype=torch.float16):
                         graph_embs= stage3model(batch['batch_graph'])
                     
-                        embs = model.get_input_embeddings()(batch['input_ids'])
+                        embs = model.get_input_embeddings()(batch['input_ids']).clone()
 
                         embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
 
