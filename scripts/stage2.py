@@ -8,7 +8,7 @@ from torch.amp import GradScaler
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
-from transformers import AutoTokenizer,  OPTForCausalLM
+from transformers import AutoTokenizer,  AutoModelForCausalLM
 
 from src.model.stage_models import Stage2Wrapper
 from src.datasets.collate import TrainCollater2
@@ -68,10 +68,11 @@ def main():
     # 3. Загрузка модели
     # device_map="auto" сама распределит модель, 
     # torch_dtype=torch.float16 критически важен для экономии памяти на P100
-    model = OPTForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         model_name, 
-        dtype=torch.float16, 
-        device_map=device
+        device_map=device,
+        torch_dtype=torch.float16, 
+        trust_remote_code=True
     )
     model.gradient_checkpointing_enable()
 
@@ -109,7 +110,7 @@ def main():
             
                 graph_embs= stage2model(batch['batch_graph'])
                 
-                embs = model.get_input_embeddings()(batch['input_ids'])
+                embs = model.get_input_embeddings()(batch['input_ids']).clone()
 
                 embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
 
