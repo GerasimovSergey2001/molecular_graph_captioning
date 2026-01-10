@@ -69,13 +69,22 @@ def main():
     model.resize_token_embeddings(len(galactica_tokenizer))
 
     # 4. Теперь настраиваем LoRA
+    lora_config = {
+    "base_model_name_or_path": None,
+    "bias": "none",
+    "fan_in_fan_out": False,
+    "inference_mode": False,
+    "init_lora_weights": True,
+    "lora_alpha": 32,
+    "lora_dropout": 0.1,
+    "target_modules": ["q_proj", "v_proj", "out_proj", "fc1", "fc2"],
+    "peft_type": "LORA",
+    "r": 16,
+    "modules_to_save": None,
+    "task_type": "CAUSAL_LM"
+    }
     lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        target_modules=["q_proj", "v_proj", "k_proj", "out_proj"], # k_proj тоже можно добавить
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM"
+    **lora_config
     )
     model = get_peft_model(model, lora_config)
     model.gradient_checkpointing_enable()
@@ -136,7 +145,7 @@ def main():
             
                 graph_embs= stage3model(batch['batch_graph'])
                 
-                embs = model.get_input_embeddings()(batch['input_ids'])
+                embs = model.get_input_embeddings()(batch['input_ids']).clone()
 
                 embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
 
@@ -197,7 +206,7 @@ def main():
                     with torch.autocast(device_type=device, dtype=torch.float16):
                         graph_embs= stage3model(batch['batch_graph'])
                     
-                        embs = model.get_input_embeddings()(batch['input_ids']).clone()
+                        embs = model.get_input_embeddings()(batch['input_ids'])
 
                         embs[batch['mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(embs.dtype)
 
