@@ -25,7 +25,7 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    accumulation_steps = 2
+    accumulation_steps = 4
 
     model_name = "facebook/galactica-1.3b"
 
@@ -45,12 +45,12 @@ def main():
     num_workers, pin_memory = 4, True
 
     train_loader = DataLoader(train_dataset, 
-                                batch_size=64, shuffle=True, 
+                                batch_size=32, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, 2048)
                                 )
     val_loader = DataLoader(val_dataset, 
-                                batch_size=64, shuffle=False, 
+                                batch_size=32, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 collate_fn=TrainCollater2(galactica_tokenizer, 2048)
                                 )
