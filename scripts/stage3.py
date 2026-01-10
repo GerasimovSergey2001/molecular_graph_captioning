@@ -111,7 +111,7 @@ def main():
     weight_decay = 0.05
     warmup_lr = 1e-6
     retrieval_eval_epoch = 10
-    num_epochs = 45 
+    num_epochs = 33
     max_steps = (len(train_loader) // accumulation_steps) * num_epochs
 
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
