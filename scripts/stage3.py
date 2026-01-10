@@ -12,7 +12,7 @@ from peft import LoraConfig, get_peft_model
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from src.model.stage_models import Stage2Wrapper
 from src.datasets.collate import TrainCollater2
-from src.model.utils import get_scheduler
+from src.model.utils import get_scheduler, count_trainable_params
 
 from sacrebleu import corpus_bleu
 from bert_score import score as bertscore
@@ -47,17 +47,17 @@ def main():
     train_loader = DataLoader(train_dataset, 
                                 batch_size=16, shuffle=True, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
-                                collate_fn=TrainCollater2(galactica_tokenizer, None)
+                                collate_fn=TrainCollater2(galactica_tokenizer, 2048)
                                 )
     val_loader = DataLoader(val_dataset, 
                                 batch_size=16, shuffle=False, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
-                                collate_fn=TrainCollater2(galactica_tokenizer, None)
+                                collate_fn=TrainCollater2(galactica_tokenizer, 2048)
                                 )
 
     
 
-    # 2. Загружаем модель в bfloat16 (для A100 это идеал)
+    # 2. Загружаем модель в float16 (для A100 это идеал)
     model = AutoModelForCausalLM.from_pretrained(
         model_name, 
         device_map=device,
@@ -78,7 +78,9 @@ def main():
         task_type="CAUSAL_LM"
     )
     model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters() # Посмотрите, сколько параметров добавилось
+    model.gradient_checkpointing_enable()
+    model.enable_input_require_grads()
+    count_trainable_params(model, "Galactica with LoRA")
 
     # 5. Инициализируем Stage3Model (GNN + Adapter)
     # Оставляем в float32 для стабильности AdamW
@@ -100,8 +102,8 @@ def main():
     weight_decay = 0.05
     warmup_lr = 1e-6
     retrieval_eval_epoch = 10
-    num_epochs = 100
-    max_steps = len(train_loader)*num_epochs
+    num_epochs = 45 
+    max_steps = (len(train_loader) // accumulation_steps) * num_epochs
 
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
     # Настраиваем AdamW (стандарт для Stage 3)
@@ -172,13 +174,21 @@ def main():
         plt.tight_layout()
         plt.savefig(os.path.join(plot_dir, f"stage3_train_loss_epoch_{epoch}.png"))
         plt.show()
+        plt.close()
 
-        if epoch%retrieval_eval_epoch==0:
+        if epoch == 1:
+            with torch.no_grad():
+                gnn_grad_norm = torch.nn.utils.clip_grad_norm_(stage3model.parameters(), float('inf'))
+                lora_grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), float('inf'))
+                print(f"GNN/Adapter Grad Norm: {gnn_grad_norm:.4f}")
+                print(f"LoRA Grad Norm: {lora_grad_norm:.4f}")
+
+        if (epoch-1)%retrieval_eval_epoch==0:
             val_epoch_loss = []
             refs, preds = [], []
             stage3model.eval()
             model.eval()
-            for batch in val_loader:
+            for i, batch in enumerate(val_loader):
 
                 for k, v in batch.items():
                     batch[k] = v.to(device)
@@ -202,38 +212,41 @@ def main():
                             attention_mask=attention_mask,
                             labels=labels,           
                             return_dict=True).loss
-                    
-                        prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
-                        prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
                         
-                        generated_ids = model.generate(
-                            inputs_embeds = prompt_embs,
-                            attention_mask=batch["prompt_attention_mask"],
-                            max_new_tokens=128,
-                            do_sample=True,         
-                            temperature=0.7,       
-                            top_p=0.7,               
-                            repetition_penalty=1.2,
-                            pad_token_id=galactica_tokenizer.pad_token_id,
-                            eos_token_id=galactica_tokenizer.eos_token_id,
-                        )
-                    preds.extend(
-                        galactica_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
-                    )
-                    refs.extend(batch['batch_graph'].description)
+                        if i < 5:
+                    
+                            prompt_embs = model.get_input_embeddings()(batch['prompt_ids'])
+                            prompt_embs[batch['prompt_mol_mask']] = graph_embs.reshape(-1, graph_embs.shape[-1]).to(prompt_embs.dtype)
+                            
+                            generated_ids = model.generate(
+                                inputs_embeds = prompt_embs,
+                                attention_mask=batch["prompt_attention_mask"],
+                                max_new_tokens=256,
+                                do_sample=True,         
+                                temperature=0.7,       
+                                top_p=0.7,               
+                                repetition_penalty=1.2,
+                                pad_token_id=galactica_tokenizer.pad_token_id,
+                                eos_token_id=galactica_tokenizer.eos_token_id,
+                            )
+                            preds.extend(
+                                galactica_tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
+                            )
+                            refs.extend(batch['batch_graph'].description)
                     
                     val_epoch_loss.append(loss.detach().cpu().numpy())  
 
             val_loss.append(np.mean(val_epoch_loss))
-
+            val_epochs = [i for i in range(1, epoch + 1) if (i-1) % retrieval_eval_epoch == 0]
             plt.figure(figsize=(12, 5))
             plt.xlabel('Epochs')
             plt.ylabel('Loss')
             plt.title("Val Set")
-            plt.plot(np.arange(len(val_loss)), val_loss)
+            plt.plot(val_epochs, val_loss)
             plt.tight_layout()
             plt.savefig(os.path.join(plot_dir, f"stage3_val_loss_epoch_{epoch}.png"))
             plt.show()
+            plt.close()
 
             _, _, f1 = bertscore(
                         preds, 
