@@ -11,12 +11,14 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from src.model.stage_models import Stage2Wrapper
 from src.datasets.collate import TestCollater
 
+from pathlib import Path
 
 def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-
+    dir = Path("./checkpoints")
+    
     repo_id = "SergeiGerasimov/galactica_full_final"
 
     lora_weights_path = "galactica_lora_epoch11"
