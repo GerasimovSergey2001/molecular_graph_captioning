@@ -24,10 +24,7 @@ def main():
     # tokenizer_path = 'galactica_full_final'
     # model_name = "facebook/galactica-1.3b"
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        repo_id, 
-        local_files_only=True
-        )
+    tokenizer = AutoTokenizer.from_pretrained(repo_id)
     gnn_path = hf_hub_download(repo_id=repo_id, filename="gnn_final.pth")
     adapter_path = hf_hub_download(repo_id=repo_id, filename="mlp_adapter_final.pth")
     # if lora_weights_path != "galactica_full_final":
