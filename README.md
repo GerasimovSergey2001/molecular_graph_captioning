@@ -74,3 +74,10 @@ This generates `galactica_full_final.csv` with generated descriptions for each t
 ## Alternative
 
 You can run `molecular_graph_captioning.ipynb` in Google Colab
+
+
+## Model Storage
+
+Weights for LLM, GNN and MLPAdapter are stored at https://huggingface.co/SergeiGerasimov/galactica_full_final
+
+`test_results.py` uses models from this storage.
