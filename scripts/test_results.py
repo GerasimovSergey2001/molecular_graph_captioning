@@ -20,24 +20,10 @@ def main():
 
     repo_id = "SergeiGerasimov/galactica_full_final"
 
-    # lora_weights_path = 'galactica_full_final'#"galactica_lora_epoch11"
-    # tokenizer_path = 'galactica_full_final'
-    # model_name = "facebook/galactica-1.3b"
 
     tokenizer = AutoTokenizer.from_pretrained(repo_id)
     gnn_path = hf_hub_download(repo_id=repo_id, filename="gnn_final.pth")
     adapter_path = hf_hub_download(repo_id=repo_id, filename="mlp_adapter_final.pth")
-    # if lora_weights_path != "galactica_full_final":
-    #     base_model = AutoModelForCausalLM.from_pretrained(
-    #     model_name,
-    #     torch_dtype=torch.float16, 
-    #     device_map=device
-    #     )
-    #     base_model.resize_token_embeddings(len(tokenizer))
-    #     model = PeftModel.from_pretrained(
-    #     base_model, 
-    #     str(dir/lora_weights_path)
-    #     )
     model = AutoModelForCausalLM.from_pretrained(
         repo_id,
         torch_dtype=torch.float16,

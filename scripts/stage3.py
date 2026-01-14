@@ -57,7 +57,6 @@ def main():
 
     
 
-    # 2. Загружаем модель в float16 (для A100 это идеал)
     model = AutoModelForCausalLM.from_pretrained(
         model_name, 
         device_map=device,
@@ -65,10 +64,9 @@ def main():
         trust_remote_code=True
     )
     
-    # 3. Сначала расширяем эмбеддинги!
+    
     model.resize_token_embeddings(len(galactica_tokenizer))
 
-    # 4. Теперь настраиваем LoRA
     lora_config = {
     "base_model_name_or_path": None,
     "bias": "none",
@@ -91,19 +89,11 @@ def main():
     model.enable_input_require_grads()
     count_trainable_params(model, "Galactica with LoRA")
 
-    # 5. Инициализируем Stage3Model (GNN + Adapter)
-    # Оставляем в float32 для стабильности AdamW
+    
     stage3model = Stage2Wrapper(
         gnn_pretrained='./checkpoints/gnn_stage2.pth', 
         adapter_pretrained='./checkpoints/mlp_adapter_stage2.pth'
     ).to(device)
-
-    # 3. Загрузка модели
-    # device_map="auto" сама распределит модель, 
-    # torch_dtype=torch.float16 критически важен для экономии памяти на P100
-
-    # 4. Важно: если мы добавили токен в токенизатор, 
-    # нужно расширить матрицу эмбеддингов модели
 
     warmup_steps = 1000
     init_lr = 1e-4
@@ -115,7 +105,7 @@ def main():
     max_steps = (len(train_loader) // accumulation_steps) * num_epochs
 
     scaler = torch.amp.GradScaler('cuda', enabled=(device == 'cuda'))
-    # Настраиваем AdamW (стандарт для Stage 3)
+
     optimizer = optim.AdamW([
         {
             "params": [p for p in model.parameters() if p.requires_grad],
@@ -277,7 +267,6 @@ def main():
             torch.save(stage3model.adapter.state_dict(), f"./checkpoints/mlp_adapter_stage3{epoch}.pth")
 
 
-    # Объединяем веса LoRA с основными весами
     merged_model = model.merge_and_unload()
     merged_model.save_pretrained("./checkpoints/galactica_full_final")
     galactica_tokenizer.save_pretrained("./checkpoints/galactica_full_final")

@@ -65,9 +65,6 @@ def main():
                         adapter_pretrained="./checkpoints/mlp_adapter_stage1.pth"
                         ).to(device)
 
-    # 3. Загрузка модели
-    # device_map="auto" сама распределит модель, 
-    # torch_dtype=torch.float16 критически важен для экономии памяти на P100
     model = AutoModelForCausalLM.from_pretrained(
         model_name, 
         device_map=device,
@@ -75,9 +72,6 @@ def main():
         trust_remote_code=True
     )
     model.gradient_checkpointing_enable()
-
-    # 4. Важно: если мы добавили токен в токенизатор, 
-    # нужно расширить матрицу эмбеддингов модели
     model.resize_token_embeddings(len(galactica_tokenizer))
     model.eval()
     freeze_model(model)
@@ -214,18 +208,6 @@ def main():
             plt.savefig(os.path.join(plot_dir, f"stage2_val_loss_epoch_{epoch}.png"))
             plt.show()
             plt.close()
-            # _, _, f1 = bertscore(
-            #             preds, 
-            #             refs, 
-            #             lang="en", 
-            #             device=device,
-            #             verbose=False
-            #         )
-            # f1 = f1.mean().item()
-
-            # bleu = corpus_bleu(preds, [[ref] for ref in refs]).score
-            # print("Bleu: ", bleu)
-            # print("F1: ", f1)
 
     torch.save(stage2model.gnn.state_dict(), "./checkpoints/gnn_stage2.pth")
     torch.save(stage2model.adapter.state_dict(), "./checkpoints/mlp_adapter_stage2.pth")

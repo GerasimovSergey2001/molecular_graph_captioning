@@ -1,3 +1,6 @@
+# The code is taken from https://github.com/acharkq/MolCA
+
+
 import torch
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import add_self_loops, degree, softmax, to_dense_batch

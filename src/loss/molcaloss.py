@@ -3,6 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class MolCALoss(nn.Module):
+    """
+    Class which realizes loss for the first stage from MolCA ()
+    """
     def __init__(self, init_temp=0.07, learnable_temp=True):
         super().__init__()
         if learnable_temp:
@@ -12,14 +15,13 @@ class MolCALoss(nn.Module):
 
     def get_contrastive_loss(self, g_embeds, t_embeds):
         """
-        g_embeds: [batch_size, emb_dim] (уже после readout)
-        t_embeds: [batch_size, emb_dim] (CLS токены)
+        g_embeds: [batch_size, emb_dim]
+        t_embeds: [batch_size, emb_dim] (CLS tokens)
         """
         g_embeds = F.normalize(g_embeds, p=2, dim=-1)
         t_embeds = F.normalize(t_embeds, p=2, dim=-1)
 
         t_scale = torch.exp(self.temp)
-        # Используем .t() вместо .T для избежания UserWarning
         logits_per_graph = t_scale * (g_embeds @ t_embeds.t())
         logits_per_text = logits_per_graph.t()
 
@@ -33,7 +35,6 @@ class MolCALoss(nn.Module):
     def get_matching_loss(self, g_embeds, t_embeds, sim_matrix, itm_head):
         batch_size = g_embeds.size(0)
         
-        # Таргеты: 1 для позитивов, 0 для негативов
         labels = torch.cat([
             torch.ones(batch_size, device=g_embeds.device), 
             torch.zeros(2 * batch_size, device=g_embeds.device)
@@ -46,11 +47,9 @@ class MolCALoss(nn.Module):
             idx_t_neg = sim_matrix_masked.argmax(dim=1)
             idx_g_neg = sim_matrix_masked.argmax(dim=0)
 
-        # Майнинг негативов
         g_all = torch.cat([g_embeds, g_embeds, g_embeds[idx_g_neg]], dim=0)
         t_all = torch.cat([t_embeds, t_embeds[idx_t_neg], t_embeds], dim=0)
 
-        # Подаем конкатенацию в ITM head
         logits = itm_head(torch.cat([g_all, t_all], dim=-1)).squeeze(-1)
         
         return F.binary_cross_entropy_with_logits(logits, labels)
@@ -59,15 +58,14 @@ class MolCALoss(nn.Module):
         """
         graph_feats: [batch_size, num_nodes, emb_dim]
         text_feats:  [batch_size, emb_dim] (CLS токен)
+        itm_head: nn.Module - head for clasification
+
+        Returns: sum of losses
         """
-        # 1. READOUT: Усредняем эмбеддинги узлов, чтобы получить вектор всей молекулы
-        # Результат: [batch_size, emb_dim]
         g_embeds_global = graph_feats.mean(dim=1) 
         
-        # ITC (Contrastive)
         itc_loss, sim_matrix = self.get_contrastive_loss(g_embeds_global, text_feats)
         
-        # ITM (Matching)
         itm_loss = self.get_matching_loss(g_embeds_global, text_feats, sim_matrix, itm_head)
         
         return itc_loss + itm_loss

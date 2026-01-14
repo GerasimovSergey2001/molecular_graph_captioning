@@ -7,14 +7,15 @@ from transformers import AutoModel
 
 
 class MLPAdapter(nn.Module):
+    """
+    Adapter for transfering 2D-Graph data to LLM
+    """
     def __init__(self, gin_hidden_dim, galactica_hidden_dim, num_query_tokens=32):
         super().__init__()
-        # 1. Обучаемые пулинг-токены (Query Tokens)
-        # Они будут "вытягивать" информацию из графа
+
         self.query_tokens = nn.Parameter(torch.randn(1, num_query_tokens, gin_hidden_dim))
         
-        # Cross-Attention блок (упрощенный, без BERT)
-        # Это позволит query_tokens смотреть на все узлы графа
+        # Cross-Attention Block
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=gin_hidden_dim, 
             num_heads=6, 
@@ -35,23 +36,19 @@ class MLPAdapter(nn.Module):
     def forward(self, graph_node_embeddings, node_mask):
         """
         graph_node_embeddings: [batch_size, max_nodes, gin_dim]
-        node_mask: [batch_size, max_nodes] (True для реальных узлов)
+        node_mask: [batch_size, max_nodes]
         """
         batch_size = graph_node_embeddings.size(0)
         
-        # Подготавливаем query tokens для батча
         queries = self.query_tokens.expand(batch_size, -1, -1)
         
-        # Извлекаем признаки из графа через внимание
-        # Мы используем узлы графа как Key и Value для наших запросов
         attn_out, _ = self.cross_attn(
             query=queries, 
             key=graph_node_embeddings, 
             value=graph_node_embeddings,
-            key_padding_mask=~node_mask # маскируем пустые узлы (паддинг)
+            key_padding_mask=~node_mask 
         )
         
-        # Проектируем в размерность Galactica (например, 2048 или 4096)
         output = self.mlp(attn_out)
         return output
 
