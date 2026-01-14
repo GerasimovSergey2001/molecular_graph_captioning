@@ -5,6 +5,9 @@ from rdkit import Chem
 
 
 class TrainCollater(object):
+    """
+    Collater for Stage 1
+    """
     def __init__(self, tokenizer, text_max_len):
         self.tokenizer = tokenizer
         self.text_max_len = text_max_len
@@ -46,11 +49,13 @@ class TrainCollater(object):
 
 
 class TrainCollater2(object):
+    """
+    Collater for Stage 2
+    """
     def __init__(self, tokenizer, text_max_len):
         self.tokenizer = tokenizer
         self.text_max_len = text_max_len if text_max_len is not None else 1024
 
-        # Карты маппинга OGB (входящие данные)
         self.x_map = {
             'atomic_num': list(range(0, 119)),
             'chirality': [
@@ -95,12 +100,11 @@ class TrainCollater2(object):
 
     def get_mol_and_smiles(self, graph):
         """
-        Только восстановление SMILES из графа OGB
+        SMILES Restoring from Graphs
         """
         mol = Chem.RWMol()
         node_features = graph.x.cpu().numpy()
         
-        # 1. Добавляем атомы
         for feat in node_features:
             atom = Chem.Atom(int(self.x_map['atomic_num'][feat[0]]))
             atom.SetChiralTag(getattr(Chem.rdchem.ChiralType, self.x_map['chirality'][feat[1]]))
@@ -112,16 +116,13 @@ class TrainCollater2(object):
         adj = graph.edge_index.cpu().numpy()
         edge_attr = graph.edge_attr.cpu().numpy()
         
-        # Сет для предотвращения дублирования связей
-        added_bonds = set()
+
         
-        # 2. Добавляем связи
         for i in range(adj.shape[1]):
             u, v = int(adj[0, i]), int(adj[1, i])
             
-            if u >= v: continue # Добавляем связь только один раз (u < v)
+            if u >= v: continue
                 
-            bond_key = (u, v)
             bt_str = self.e_map['bond_type'][edge_attr[i, 0]]
             
             if bt_str != 'UNSPECIFIED':
@@ -129,13 +130,10 @@ class TrainCollater2(object):
 
         final_mol = mol.GetMol()
         
-        # 3. Финализация и генерация SMILES
         try:
-            # SanitizeMol обязателен, чтобы MolToSmiles выдал корректную строку
             Chem.SanitizeMol(final_mol) 
             smiles = Chem.MolToSmiles(final_mol, isomericSmiles=True, canonical=True)
         except:
-            # Если молекула химически невозможна (ошибки валентности и т.д.)
             smiles = "" 
                 
         return smiles
@@ -154,8 +152,6 @@ class TrainCollater2(object):
         prompts_list = [self.genereate_prompt(s) for s in all_smiles]
         desc_list = [data.description + self.tokenizer.eos_token for data in batch]
 
-        # 1. Токенизируем промпты отдельно для генерации
-        # Используем padding=True и выравнивание слева
         self.tokenizer.padding_side = 'left'
         prompt_features = self.tokenizer(
             prompts_list, 
@@ -168,10 +164,9 @@ class TrainCollater2(object):
         prompt_ids = prompt_features.input_ids
         prompt_attention_mask = prompt_features.attention_mask
         
-        # Возвращаем настройку обратно (обычно для обучения удобнее right)
         self.tokenizer.padding_side = 'right'
 
-        # 2. Логика для обучения (склеивание)
+        # merging prompts and descriptions
         prompt_tokens = self.tokenizer(prompts_list, add_special_tokens=False)
         desc_tokens = self.tokenizer(desc_list, add_special_tokens=False)
 
@@ -194,12 +189,11 @@ class TrainCollater2(object):
         
         attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
         
-        # 3. Маски для молекулярных токенов
+        # masks for <mol> tokens
         mol_token_id = self.tokenizer.convert_tokens_to_ids("<mol>")
         train_mol_mask = (input_ids == mol_token_id)
-        prompt_mol_mask = (prompt_ids == mol_token_id) # Маска специально для генерации
+        prompt_mol_mask = (prompt_ids == mol_token_id) 
         
-        # Обработка графа
         batch_graph.x = batch_graph.x[:, :2].clone()
         batch_graph.edge_attr = self.process_edge_attr(batch_graph.edge_attr)
 
@@ -216,11 +210,13 @@ class TrainCollater2(object):
     
 
 class TestCollater(object):
+    """
+    Collator for Test Data
+    """
     def __init__(self, tokenizer, text_max_len):
         self.tokenizer = tokenizer
         self.text_max_len = text_max_len if text_max_len is not None else 1024
 
-        # Карты маппинга OGB (входящие данные)
         self.x_map = {
             'atomic_num': list(range(0, 119)),
             'chirality': [
@@ -265,7 +261,7 @@ class TestCollater(object):
 
     def get_mol_and_smiles(self, graph):
         """
-        Только восстановление SMILES из графа OGB
+        SMILES Restoring from Graphs
         """
         mol = Chem.RWMol()
         node_features = graph.x.cpu().numpy()
@@ -281,17 +277,14 @@ class TestCollater(object):
 
         adj = graph.edge_index.cpu().numpy()
         edge_attr = graph.edge_attr.cpu().numpy()
-        
-        # Сет для предотвращения дублирования связей
-        added_bonds = set()
+    
         
         # 2. Добавляем связи
         for i in range(adj.shape[1]):
             u, v = int(adj[0, i]), int(adj[1, i])
             
-            if u >= v: continue # Добавляем связь только один раз (u < v)
+            if u >= v: continue
                 
-            bond_key = (u, v)
             bt_str = self.e_map['bond_type'][edge_attr[i, 0]]
             
             if bt_str != 'UNSPECIFIED':
@@ -299,13 +292,10 @@ class TestCollater(object):
 
         final_mol = mol.GetMol()
         
-        # 3. Финализация и генерация SMILES
         try:
-            # SanitizeMol обязателен, чтобы MolToSmiles выдал корректную строку
             Chem.SanitizeMol(final_mol) 
             smiles = Chem.MolToSmiles(final_mol, isomericSmiles=True, canonical=True)
         except:
-            # Если молекула химически невозможна (ошибки валентности и т.д.)
             smiles = "" 
                 
         return smiles
@@ -324,8 +314,6 @@ class TestCollater(object):
         prompts_list = [self.genereate_prompt(s) for s in all_smiles]
         # desc_list = [data.description + self.tokenizer.eos_token for data in batch]
 
-        # 1. Токенизируем промпты отдельно для генерации
-        # Используем padding=True и выравнивание слева
         self.tokenizer.padding_side = 'left'
         prompt_features = self.tokenizer(
             prompts_list, 
@@ -338,38 +326,12 @@ class TestCollater(object):
         prompt_ids = prompt_features.input_ids
         prompt_attention_mask = prompt_features.attention_mask
         
-        # Возвращаем настройку обратно (обычно для обучения удобнее right)
         self.tokenizer.padding_side = 'right'
 
-        # 2. Логика для обучения (склеивание)
-        # prompt_tokens = self.tokenizer(prompts_list, add_special_tokens=False)
-        # desc_tokens = self.tokenizer(desc_list, add_special_tokens=False)
-
-        # all_input_ids = []
-        # all_labels = []
-        
-        # for p_ids, d_ids in zip(prompt_tokens.input_ids, desc_tokens.input_ids):
-        #     combined_ids = p_ids + d_ids
-        #     combined_labels = [-100] * len(p_ids) + d_ids
-            
-        #     all_input_ids.append(torch.tensor(combined_ids[:self.text_max_len]))
-        #     all_labels.append(torch.tensor(combined_labels[:self.text_max_len]))
-
-        # input_ids = torch.nn.utils.rnn.pad_sequence(
-        #     all_input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
-        # )
-        # labels = torch.nn.utils.rnn.pad_sequence(
-        #     all_labels, batch_first=True, padding_value=-100
-        # )
-        
-        # attention_mask = (input_ids != self.tokenizer.pad_token_id).long()
-        
-        # 3. Маски для молекулярных токенов
         mol_token_id = self.tokenizer.convert_tokens_to_ids("<mol>")
         # train_mol_mask = (input_ids == mol_token_id)
-        prompt_mol_mask = (prompt_ids == mol_token_id) # Маска специально для генерации
+        prompt_mol_mask = (prompt_ids == mol_token_id) 
         
-        # Обработка графа
         batch_graph.x = batch_graph.x[:, :2].clone()
         batch_graph.edge_attr = self.process_edge_attr(batch_graph.edge_attr)
 
